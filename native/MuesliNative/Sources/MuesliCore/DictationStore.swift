@@ -235,6 +235,23 @@ public final class DictationStore {
         let _ = sqlite3_exec(db, "CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_cloud_record_name ON meetings(cloud_record_name)", nil, nil, nil)
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_dictations_sync_dirty ON dictations(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
         let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_meetings_sync_dirty ON meetings(updated_at DESC) WHERE sync_dirty = 1", nil, nil, nil)
+        // Salesforce activity log: one row per meeting logged to a Salesforce record.
+        // Dedicated table (not the CloudKit sync_* columns) so a meeting can be
+        // logged to several records and we can show "already logged" state.
+        let _ = sqlite3_exec(db, """
+        CREATE TABLE IF NOT EXISTS salesforce_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+            task_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            target_type TEXT NOT NULL,
+            target_name TEXT NOT NULL,
+            instance_url TEXT NOT NULL DEFAULT '',
+            included_transcript INTEGER NOT NULL DEFAULT 0,
+            logged_at REAL NOT NULL
+        )
+        """, nil, nil, nil)
+        let _ = sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_salesforce_logs_meeting ON salesforce_logs(meeting_id, logged_at DESC)", nil, nil, nil)
         try migrateInsightsCache(db: db)
         try repairLegacyMacOriginSources(db: db)
         _ = try purgeSoftDeletedTextRecords(olderThan: Self.defaultTombstoneRetentionInterval, db: db)
@@ -2438,6 +2455,73 @@ public final class DictationStore {
     }
 
     @discardableResult
+    // MARK: - Salesforce activity log
+
+    public func recordSalesforceLog(
+        meetingID: Int64,
+        taskID: String,
+        targetID: String,
+        targetType: String,
+        targetName: String,
+        instanceURL: String,
+        includedTranscript: Bool,
+        loggedAt: Double
+    ) throws {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        INSERT INTO salesforce_logs
+            (meeting_id, task_id, target_id, target_type, target_name, instance_url, included_transcript, logged_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        sqlite3_bind_text(statement, 2, (taskID as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 3, (targetID as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 4, (targetType as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 5, (targetName as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(statement, 6, (instanceURL as NSString).utf8String, -1, nil)
+        sqlite3_bind_int(statement, 7, includedTranscript ? 1 : 0)
+        sqlite3_bind_double(statement, 8, loggedAt)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw lastError(db)
+        }
+    }
+
+    public func salesforceLogs(meetingID: Int64) throws -> [SalesforceLogEntry] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+        let sql = """
+        SELECT id, meeting_id, task_id, target_id, target_type, target_name, instance_url, included_transcript, logged_at
+        FROM salesforce_logs WHERE meeting_id = ? ORDER BY logged_at DESC
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, meetingID)
+        var results: [SalesforceLogEntry] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            results.append(SalesforceLogEntry(
+                id: sqlite3_column_int64(statement, 0),
+                meetingID: sqlite3_column_int64(statement, 1),
+                taskID: stringColumn(statement, index: 2),
+                targetID: stringColumn(statement, index: 3),
+                targetType: stringColumn(statement, index: 4),
+                targetName: stringColumn(statement, index: 5),
+                instanceURL: stringColumn(statement, index: 6),
+                includedTranscript: sqlite3_column_int(statement, 7) != 0,
+                loggedAt: sqlite3_column_double(statement, 8)
+            ))
+        }
+        return results
+    }
+
     public func createFolder(name: String, parentID: Int64? = nil) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }

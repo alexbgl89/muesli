@@ -1047,6 +1047,15 @@ struct AppConfig: Codable {
     var customLLMFormat: String = CustomLLMFormat.openAI.rawValue
     var summaryModel: String = ""
     var meetingSummaryModel: String = ""
+    // Salesforce integration (Option B: bring-your-own Connected App).
+    // The consumer key is a client_id, not a secret, so it lives in config.
+    var salesforceConsumerKey: String = ""
+    var salesforceLoginHost: String = "login.salesforce.com"
+    var salesforceAttachTranscript: Bool = false
+    // Auth method: "app" (bring-your-own Connected App) or "cli" (zero-config via the Salesforce CLI).
+    var salesforceAuthMode: String = "app"
+    // Selected Salesforce CLI org (username) when salesforceAuthMode == "cli".
+    var salesforceCLIOrg: String = ""
     var hasCompletedOnboarding: Bool = false
     var onboardingUseCase: String = OnboardingUseCase.dictation.rawValue
     var userName: String = ""
@@ -1164,6 +1173,11 @@ struct AppConfig: Codable {
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMModel = "custom_llm_model"
         case customLLMFormat = "custom_llm_format"
+        case salesforceConsumerKey = "salesforce_consumer_key"
+        case salesforceLoginHost = "salesforce_login_host"
+        case salesforceAttachTranscript = "salesforce_attach_transcript"
+        case salesforceAuthMode = "salesforce_auth_mode"
+        case salesforceCLIOrg = "salesforce_cli_org"
         case summaryModel = "summary_model"
         case meetingSummaryModel = "meeting_summary_model"
         case hasCompletedOnboarding = "has_completed_onboarding"
@@ -1319,6 +1333,11 @@ struct AppConfig: Codable {
         customLLMModel = (try? c.decode(String.self, forKey: .customLLMModel)) ?? defaults.customLLMModel
         let decodedCustomLLMFormat = (try? c.decode(String.self, forKey: .customLLMFormat)) ?? defaults.customLLMFormat
         customLLMFormat = CustomLLMFormat(rawValue: decodedCustomLLMFormat)?.rawValue ?? defaults.customLLMFormat
+        salesforceConsumerKey = (try? c.decode(String.self, forKey: .salesforceConsumerKey)) ?? defaults.salesforceConsumerKey
+        salesforceLoginHost = (try? c.decode(String.self, forKey: .salesforceLoginHost)) ?? defaults.salesforceLoginHost
+        salesforceAttachTranscript = (try? c.decode(Bool.self, forKey: .salesforceAttachTranscript)) ?? defaults.salesforceAttachTranscript
+        salesforceAuthMode = (try? c.decode(String.self, forKey: .salesforceAuthMode)) ?? defaults.salesforceAuthMode
+        salesforceCLIOrg = (try? c.decode(String.self, forKey: .salesforceCLIOrg)) ?? defaults.salesforceCLIOrg
         summaryModel = (try? c.decode(String.self, forKey: .summaryModel)) ?? defaults.summaryModel
         meetingSummaryModel = (try? c.decode(String.self, forKey: .meetingSummaryModel)) ?? defaults.meetingSummaryModel
         hasCompletedOnboarding = (try? c.decode(Bool.self, forKey: .hasCompletedOnboarding)) ?? defaults.hasCompletedOnboarding

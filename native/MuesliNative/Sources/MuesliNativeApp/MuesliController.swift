@@ -297,6 +297,9 @@ final class MuesliController: NSObject {
 
     private let chatGPTAuth = ChatGPTAuthManager.shared
     private let googleCalAuth = GoogleCalendarAuthManager.shared
+    private let salesforceAuth = SalesforceAuthManager.shared
+    private let salesforceCLI = SalesforceCLIBridge.shared
+    private let salesforceClient = SalesforceClient.shared
     private let googleCalClient = GoogleCalendarClient()
     private var calendarCheckTimer: Timer?
     private var calendarMonitoringStarted = false
@@ -1074,6 +1077,7 @@ final class MuesliController: NSObject {
         appState.activeMeetingAudioWarning = activeMeetingAudioWarning
         indicator.setMeetingRecordingPaused(appState.isMeetingRecordingPaused, config: config)
         appState.isChatGPTAuthenticated = chatGPTAuth.isAuthenticated
+        appState.isSalesforceAuthenticated = isSalesforceConnected
         appState.isGoogleCalendarAvailable = googleCalAuth.isAvailable
         appState.isGoogleCalendarVerified = googleCalAuth.isVerified
         appState.isGoogleCalendarAuthenticated = googleCalAuth.isAuthenticated
@@ -2405,6 +2409,114 @@ final class MuesliController: NSObject {
             selectMeetingSummaryBackend(.openAI)
         }
         syncAppState()
+    }
+
+    // MARK: - Salesforce
+
+    /// Runs the OAuth (PKCE loopback) flow against the user's own Connected App.
+    /// Returns a user-facing error string on failure, or nil on success.
+    func signInWithSalesforce() async -> String? {
+        do {
+            try await salesforceAuth.signIn()
+            syncAppState()
+            return nil
+        } catch {
+            fputs("[muesli-native] Salesforce connect failed: \(error)\n", stderr)
+            return error.localizedDescription
+        }
+    }
+
+    func signOutSalesforce() {
+        salesforceAuth.signOut()
+        syncAppState()
+    }
+
+    /// Whether the active Salesforce method (Connected App or CLI) can log meetings.
+    var isSalesforceConnected: Bool {
+        switch SalesforceAuthMode(rawValue: config.salesforceAuthMode) ?? .app {
+        case .app: return salesforceAuth.isAuthenticated
+        case .cli: return salesforceCLI.isConnected
+        }
+    }
+
+    /// Whether the Salesforce CLI is installed (enables the zero-config method).
+    var isSalesforceCLIAvailable: Bool { SalesforceCLIBridge.isAvailable }
+
+    func listSalesforceCLIOrgs() async -> [SalesforceCLIBridge.CLIOrg] {
+        await salesforceCLI.listOrgs()
+    }
+
+    /// Typeahead search across Contacts, Leads and Opportunities for the picker.
+    func searchSalesforce(_ query: String) async -> Result<[SalesforceRecord], Error> {
+        do {
+            return .success(try await salesforceClient.search(query))
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Log a completed meeting as a Salesforce Task against `target`. Returns a
+    /// user-facing error string on failure, or nil on success.
+    func logMeetingToSalesforce(
+        meeting: MeetingRecord,
+        target: SalesforceRecord,
+        includeTranscript: Bool
+    ) async -> String? {
+        let summary = meeting.notesState == .structuredNotes ? meeting.formattedNotes : meeting.rawTranscript
+        let subject = meeting.title.isEmpty ? "Meeting" : "Meeting: \(meeting.title)"
+        let activityDate = Self.salesforceActivityDate(from: meeting.startTime)
+        let transcript = includeTranscript ? meeting.rawTranscript : nil
+        do {
+            let taskID = try await salesforceClient.logMeeting(
+                target: target,
+                subject: subject,
+                activityDate: activityDate,
+                summary: summary,
+                transcript: transcript
+            )
+            try? dictationStore.recordSalesforceLog(
+                meetingID: meeting.id,
+                taskID: taskID,
+                targetID: target.id,
+                targetType: target.kind.label,
+                targetName: target.name,
+                instanceURL: salesforceClient.lastInstanceURL ?? "",
+                includedTranscript: includeTranscript,
+                loggedAt: Date().timeIntervalSince1970
+            )
+            return nil
+        } catch {
+            fputs("[muesli-native] Salesforce log failed: \(error)\n", stderr)
+            return error.localizedDescription
+        }
+    }
+
+    func salesforceLogs(for meetingID: Int64) -> [SalesforceLogEntry] {
+        (try? dictationStore.salesforceLogs(meetingID: meetingID)) ?? []
+    }
+
+    /// Warm the Salesforce credential cache (e.g. when the picker opens) so the
+    /// first search doesn't wait on token acquisition.
+    func prewarmSalesforce() {
+        guard isSalesforceConnected else { return }
+        Task { await salesforceClient.warmUp() }
+    }
+
+    func openSalesforceSettings() {
+        appState.selectedTab = .settings
+        appState.selectedSettingsPane = .meetings
+    }
+
+    /// Parse a stored meeting `startTime` (ISO-8601 text) into a date for
+    /// Task.ActivityDate. Falls back to now if the string can't be parsed.
+    static func salesforceActivityDate(from startTime: String) -> Date {
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = withFractional.date(from: startTime) { return date }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        if let date = plain.date(from: startTime) { return date }
+        return Date()
     }
 
     // MARK: - Google Calendar
