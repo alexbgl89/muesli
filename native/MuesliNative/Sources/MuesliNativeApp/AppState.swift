@@ -142,6 +142,7 @@ final class AppState {
     var dictationState: DictationState = .idle
     var isVoiceNoteRecording: Bool = false
     var isChatGPTAuthenticated: Bool = false
+    var isSalesforceAuthenticated: Bool = false
     var isGoogleCalendarAvailable: Bool = false
     var isGoogleCalendarVerified: Bool = false
     var isGoogleCalendarAuthenticated: Bool = false

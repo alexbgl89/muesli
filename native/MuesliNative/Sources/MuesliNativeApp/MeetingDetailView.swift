@@ -78,6 +78,8 @@ struct MeetingDetailView: View {
     @State private var showNewFolderPrompt = false
     @State private var newFolderName = ""
     @State private var threadContext: MeetingThreadContext?
+    @State private var showSalesforcePicker = false
+    @State private var salesforceLogged = false
 
     init(
         meeting: MeetingRecord?,
@@ -115,9 +117,11 @@ struct MeetingDetailView: View {
                 .background(MuesliTheme.backgroundBase)
                 .onAppear {
                     threadContext = controller.meetingThreadContext(for: meeting.id)
+                    salesforceLogged = !controller.salesforceLogs(for: meeting.id).isEmpty
                 }
                 .onChange(of: meeting.id) { _, _ in
                     syncLocalState(with: meeting)
+                    salesforceLogged = !controller.salesforceLogs(for: meeting.id).isEmpty
                 }
                 .onChange(of: meeting.status) { _, _ in
                     syncLocalState(with: meeting)
@@ -177,6 +181,19 @@ struct MeetingDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Are you sure you want to delete this meeting? Saved notes, transcript, and any retained recording will be removed.")
+        }
+        .sheet(isPresented: $showSalesforcePicker) {
+            if let meeting {
+                SalesforceRecordPickerView(
+                    meeting: meeting,
+                    controller: controller,
+                    appState: appState,
+                    onClose: {
+                        showSalesforcePicker = false
+                        salesforceLogged = !controller.salesforceLogs(for: meeting.id).isEmpty
+                    }
+                )
+            }
         }
     }
 
@@ -455,6 +472,7 @@ struct MeetingDetailView: View {
                 resumeChooserIfAvailable(for: meeting)
                 templateMenu(for: meeting, appliedTemplate: appliedTemplate)
                 exportMenu(for: meeting)
+                salesforceButton(for: meeting)
                 summaryAction(for: meeting)
                 editButton(for: meeting)
                 moreActionsMenu(for: meeting)
@@ -465,6 +483,7 @@ struct MeetingDetailView: View {
                     resumeChooserIfAvailable(for: meeting)
                     templateMenu(for: meeting, appliedTemplate: appliedTemplate)
                     exportMenu(for: meeting)
+                    salesforceButton(for: meeting)
                     summaryAction(for: meeting)
                 }
                 HStack(spacing: MuesliTheme.spacing8) {
@@ -872,6 +891,14 @@ struct MeetingDetailView: View {
         .menuStyle(.borderlessButton)
         .fixedSize()
         .disabled(isEditingNotes || isEditingTranscript)
+    }
+
+    /// Prominent header button to log the meeting to Salesforce (opens the picker).
+    private func salesforceButton(for meeting: MeetingRecord) -> some View {
+        iconButton("cloud", label: salesforceLogged ? "Salesforce ✓" : "Salesforce") {
+            showSalesforcePicker = true
+        }
+        .help(salesforceLogged ? "Logged to Salesforce — log again" : "Log this meeting to Salesforce")
     }
 
     @ViewBuilder
