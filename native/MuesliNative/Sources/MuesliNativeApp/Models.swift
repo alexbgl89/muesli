@@ -380,6 +380,15 @@ struct SummaryModelPreset {
         SummaryModelPreset(id: "gpt-5.2", label: "GPT-5.2"),
     ]
 
+    /// Claude Code accepts model aliases, which keep tracking the latest release
+    /// instead of pinning a dated id that quietly retires.
+    static let claudeCodeModels: [SummaryModelPreset] = [
+        SummaryModelPreset(id: "sonnet", label: "Sonnet (default)"),
+        SummaryModelPreset(id: "opus", label: "Opus"),
+        SummaryModelPreset(id: "fable", label: "Fable"),
+        SummaryModelPreset(id: "haiku", label: "Haiku"),
+    ]
+
     static let openRouterModels: [SummaryModelPreset] = [
         SummaryModelPreset(id: "stepfun/step-3.5-flash:free", label: "Step 3.5 Flash (256k ctx)"),
         SummaryModelPreset(id: "nvidia/nemotron-3-super-120b-a12b:free", label: "Nemotron 3 Super 120B (262k ctx)"),
@@ -527,6 +536,13 @@ struct MeetingSummaryBackendOption: Equatable {
         label: "ChatGPT"
     )
 
+    /// Shells out to a locally installed Claude Code CLI, so summaries run on
+    /// the user's own Claude subscription instead of an API key.
+    static let claudeCode = MeetingSummaryBackendOption(
+        backend: "claude_code",
+        label: ClaudeCodeCLIBridge.displayLabel
+    )
+
     static let ollama = MeetingSummaryBackendOption(
         backend: "ollama",
         label: "Ollama"
@@ -542,7 +558,7 @@ struct MeetingSummaryBackendOption: Equatable {
         label: "Custom LLM"
     )
 
-    static let all: [MeetingSummaryBackendOption] = [.chatGPT, .openAI, .openRouter, .ollama, .lmStudio, .customLLM]
+    static let all: [MeetingSummaryBackendOption] = [.chatGPT, .claudeCode, .openAI, .openRouter, .ollama, .lmStudio, .customLLM]
 
     static func resolved(_ backend: String?) -> MeetingSummaryBackendOption {
         guard let backend, let option = all.first(where: { $0.backend == backend }) else {
@@ -1074,6 +1090,10 @@ struct AppConfig: Codable {
     var customLLMAPIKey: String = ""
     var customLLMModel: String = ""
     var customLLMFormat: String = CustomLLMFormat.openAI.rawValue
+    /// Absolute override for the `claude` binary; empty means auto-discover.
+    var claudeCodePath: String = ""
+    var claudeCodeModel: String = ""
+    var claudeCodeTimeoutSeconds: Int = ClaudeCodeCLIBridge.defaultTimeoutSeconds
     var summaryModel: String = ""
     var meetingSummaryModel: String = ""
     var hasCompletedOnboarding: Bool = false
@@ -1109,6 +1129,7 @@ struct AppConfig: Codable {
     var postProcessorOllamaModel: String = ""
     var postProcessorLMStudioModel: String = ""
     var postProcessorCustomLLMModel: String = ""
+    var postProcessorClaudeCodeModel: String = ""
     var activeTranscriptCleanupPromptId: String = TranscriptCleanupPrompts.defaultID
     var customTranscriptCleanupPrompts: [CustomTranscriptCleanupPrompt] = []
     var postProcessorSystemPrompt: String = PostProcessorOption.defaultSystemPrompt
@@ -1194,6 +1215,9 @@ struct AppConfig: Codable {
         case customLLMAPIKey = "custom_llm_api_key"
         case customLLMModel = "custom_llm_model"
         case customLLMFormat = "custom_llm_format"
+        case claudeCodePath = "claude_code_path"
+        case claudeCodeModel = "claude_code_model"
+        case claudeCodeTimeoutSeconds = "claude_code_timeout_seconds"
         case summaryModel = "summary_model"
         case meetingSummaryModel = "meeting_summary_model"
         case hasCompletedOnboarding = "has_completed_onboarding"
@@ -1227,6 +1251,7 @@ struct AppConfig: Codable {
         case postProcessorOllamaModel = "post_processor_ollama_model"
         case postProcessorLMStudioModel = "post_processor_lmstudio_model"
         case postProcessorCustomLLMModel = "post_processor_custom_llm_model"
+        case postProcessorClaudeCodeModel = "post_processor_claude_code_model"
         case activeTranscriptCleanupPromptId = "active_transcript_cleanup_prompt_id"
         case customTranscriptCleanupPrompts = "custom_transcript_cleanup_prompts"
         case postProcessorSystemPrompt = "post_processor_system_prompt"
@@ -1356,6 +1381,11 @@ struct AppConfig: Codable {
         customLLMModel = (try? c.decode(String.self, forKey: .customLLMModel)) ?? defaults.customLLMModel
         let decodedCustomLLMFormat = (try? c.decode(String.self, forKey: .customLLMFormat)) ?? defaults.customLLMFormat
         customLLMFormat = CustomLLMFormat(rawValue: decodedCustomLLMFormat)?.rawValue ?? defaults.customLLMFormat
+        claudeCodePath = (try? c.decode(String.self, forKey: .claudeCodePath)) ?? defaults.claudeCodePath
+        claudeCodeModel = (try? c.decode(String.self, forKey: .claudeCodeModel)) ?? defaults.claudeCodeModel
+        claudeCodeTimeoutSeconds = Int(ClaudeCodeCLIBridge.resolvedTimeout(
+            (try? c.decode(Int.self, forKey: .claudeCodeTimeoutSeconds)) ?? defaults.claudeCodeTimeoutSeconds
+        ))
         summaryModel = (try? c.decode(String.self, forKey: .summaryModel)) ?? defaults.summaryModel
         meetingSummaryModel = (try? c.decode(String.self, forKey: .meetingSummaryModel)) ?? defaults.meetingSummaryModel
         hasCompletedOnboarding = (try? c.decode(Bool.self, forKey: .hasCompletedOnboarding)) ?? defaults.hasCompletedOnboarding
@@ -1408,6 +1438,7 @@ struct AppConfig: Codable {
         postProcessorOllamaModel = (try? c.decode(String.self, forKey: .postProcessorOllamaModel)) ?? defaults.postProcessorOllamaModel
         postProcessorLMStudioModel = (try? c.decode(String.self, forKey: .postProcessorLMStudioModel)) ?? defaults.postProcessorLMStudioModel
         postProcessorCustomLLMModel = (try? c.decode(String.self, forKey: .postProcessorCustomLLMModel)) ?? defaults.postProcessorCustomLLMModel
+        postProcessorClaudeCodeModel = (try? c.decode(String.self, forKey: .postProcessorClaudeCodeModel)) ?? defaults.postProcessorClaudeCodeModel
         customTranscriptCleanupPrompts = (try? c.decode([CustomTranscriptCleanupPrompt].self, forKey: .customTranscriptCleanupPrompts)) ?? defaults.customTranscriptCleanupPrompts
         activeTranscriptCleanupPromptId = (try? c.decode(String.self, forKey: .activeTranscriptCleanupPromptId)) ?? defaults.activeTranscriptCleanupPromptId
         postProcessorSystemPrompt = (try? c.decode(String.self, forKey: .postProcessorSystemPrompt)) ?? defaults.postProcessorSystemPrompt

@@ -45,6 +45,8 @@ enum TranscriptCleanupClient {
             return SummaryModelPreset.openAIModels.first?.id ?? "gpt-5.4-mini"
         case .some(.openRouter):
             return SummaryModelPreset.openRouterModels.first?.id ?? "stepfun/step-3.5-flash:free"
+        case .some(.claudeCode):
+            return ClaudeCodeCLIBridge.defaultModel
         case .some(.ollama):
             return "qwen3.5"
         case .some(.lmStudio), .some(.customLLM):
@@ -74,6 +76,8 @@ enum TranscriptCleanupClient {
             raw = config.postProcessorLMStudioModel
         case .some(.customLLM):
             raw = config.postProcessorCustomLLMModel
+        case .some(.claudeCode):
+            raw = config.postProcessorClaudeCodeModel
         case nil:
             raw = config.activePostProcessorId
         default:
@@ -96,6 +100,8 @@ enum TranscriptCleanupClient {
         case .some(.openRouter):
             return !config.openRouterAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 || ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"] != nil
+        case .some(.claudeCode):
+            return ClaudeCodeCLIBridge.shared.isInstalled(config: config)
         case .some(.ollama):
             return resolveConfiguredOllamaURL(config: config) != nil
         case .some(.lmStudio):
@@ -156,6 +162,25 @@ enum TranscriptCleanupClient {
                 userPrompt: userPrompt,
                 model: model
             )
+        case .claudeCode:
+            do {
+                raw = try await ClaudeCodeCLIBridge.shared.complete(
+                    instructions: effectiveSystemPrompt,
+                    userPrompt: userPrompt,
+                    model: model,
+                    timeout: ClaudeCodeCLIBridge.resolvedTimeout(config.claudeCodeTimeoutSeconds),
+                    config: config
+                )
+            } catch let error as ClaudeCodeCLIError {
+                switch error {
+                case .notInstalled, .notSignedIn, .invalidBinaryPath:
+                    throw TranscriptCleanupError.missingConfiguration(
+                        error.errorDescription ?? "Claude Code is not ready."
+                    )
+                default:
+                    throw error
+                }
+            }
         case .ollama:
             raw = try await cleanWithOllama(systemPrompt: effectiveSystemPrompt, userPrompt: userPrompt, model: model, config: config)
         case .lmStudio:

@@ -13,7 +13,7 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Meeting export:** Export notes or transcript as PDF (paginated US Letter) or Markdown via `MeetingExporter.swift`
 - **Screen context:** Accessibility API captures app name + text around cursor for dictation context-awareness (opt-in, off by default)
 - **11 ASR models:** Parakeet v3/v2, Whisper Tiny/Small/Medium/Large Turbo, Cohere Transcribe, Nemotron 3.5 Multilingual, SenseVoice Small, Qwen3 ASR, Indic ASR
-- **3 summarization backends:** OpenAI API key, OpenRouter API key, ChatGPT OAuth (subscription-based)
+- **7 summarization backends:** ChatGPT OAuth, **Claude Code CLI** (subscription, no API key), OpenAI, OpenRouter, Ollama, LM Studio, Custom LLM (OpenAI-compatible or Anthropic Messages)
 - **Camera-based meeting detection:** Requires mic + camera + recognized meeting app (camera alone won't trigger)
 - **Join & Record:** Extract meeting URLs from calendar events (Zoom, Meet, Teams, Webex, Chime, FaceTime), split button with "Join & Record" / "Join Only" / "Record Only", platform icons in notifications
 - **Google Calendar integration:** Coming Up section, status bar, pre-meeting countdowns, event-driven notifications via `EKEventStoreChangedNotification`
@@ -147,7 +147,11 @@ native/MuesliNative/Sources/
 │   ├── OnboardingView.swift      # 7-step onboarding with real permission polling + dictation test
 │   ├── OnboardingProgress.swift  # Crash-safe onboarding state persistence
 │   ├── MeetingSession.swift      # Meeting lifecycle + diarization + screen context
-│   ├── MeetingSummaryClient.swift # OpenAI / OpenRouter / ChatGPT summarization
+│   ├── MeetingSummaryClient.swift # OpenAI / OpenRouter / ChatGPT / Claude Code summarization
+│   ├── ClaudeCodeCLIBridge.swift  # Headless `claude -p` bridge (hardened argv + sanitized env)
+│   ├── ClaudeCodeBinaryLocator.swift # PATH-free `claude` discovery
+│   ├── ClaudeCodeSignInLauncher.swift # Opens `claude auth login` in Terminal
+│   ├── LocalCLIProcessRunner.swift # Generic subprocess runner (stdin, timeout, cancel)
 │   ├── SystemAudioRecorder.swift # ScreenCaptureKit SCStream for system audio
 │   ├── ChatGPTAuthManager.swift  # OAuth PKCE + WHAM API
 │   ├── HotkeyMonitor.swift       # Global hotkey detection (modifier keys)
@@ -214,6 +218,41 @@ Key implementation details:
 - Uses same `DictationContextCapture.capture()` (no screenshots — `CGWindowListCreateImage` conflicts with `SCStream`)
 - Deduplicated, aggregated, injected into meeting summary prompt as "Visual context" section
 - OCR-based capture (`ScreenContextCapture.captureOnce()`) exists in code but is unused until CoreAudio migration
+
+## Claude Code Summary Backend
+
+`claude_code` runs meeting summaries and transcript cleanup through a locally
+installed Claude Code CLI, so it uses the user's **Claude subscription** — no API
+key. (Claude *by API key* already works via Custom LLM + Anthropic Messages.)
+
+**Invocation** (`ClaudeCodeCLIBridge.completionArguments`):
+`claude -p --output-format json --model <alias> --system-prompt <instructions> --safe-mode --setting-sources "" --strict-mcp-config --disable-slash-commands --permission-mode dontAsk --no-session-persistence --tools ""`
+
+The prompt (which carries the transcript) goes on **stdin** — argv is world-readable via `ps` and capped by `ARG_MAX`.
+
+**Why each guard exists:**
+- `--tools ""` — meeting transcripts are attacker-controlled text (anyone on the call, plus OCR'd screen content). With no tool schemas in context there is nothing for injected text to call. This is the security core, not a nicety. It must stay **last** in argv: `--tools` is variadic and greedily eats following non-flag arguments.
+- `--system-prompt` — fully replaces Claude Code's coding-agent prompt.
+- `--safe-mode` — disables CLAUDE.md, skills, plugins, hooks, MCP, custom agents, **while keeping OAuth auth**.
+- `--no-session-persistence` — keeps transcripts out of `~/.claude/projects/**`, i.e. outside Muesli's retention and delete-meeting flow.
+- **Never `--bare`** — it forces `ANTHROPIC_API_KEY`-only auth and never reads OAuth, defeating the entire feature.
+
+**Environment** (`childEnvironment`) is a full replacement, not an overlay:
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` + `DISABLE_NON_ESSENTIAL_MODEL_CALLS=1` are **required**, not tuning. Without them a background model call also receives the prompt — a verified probe showed `claude-haiku-4-5` taking *more* input tokens than the selected model. For meeting transcripts that is an extra recipient.
+- Strips inherited `ANTHROPIC_API_KEY` / `ANTHROPIC_BASE_URL` / `CLAUDE_CODE_USE_BEDROCK` / `CLAUDE_CONFIG_DIR` / `AWS_*`. An inherited API key would silently bill API credits instead of the subscription; a stray `CLAUDE_CONFIG_DIR` makes a signed-in user look signed out.
+- `HOME` **and `USER`** are set explicitly (from `NSHomeDirectory()` / `NSUserName()`), not forwarded. Both are required to reach the stored credentials: verified that `HOME`+`PATH` alone reports `loggedIn: false`, and adding `USER` alone flips it to `true`. A launchd-spawned GUI app is not guaranteed to have either, and the failure mode is a misleading "not signed in".
+
+**Error handling:** `subtype` stays `"success"` even on failure — only `is_error` is reliable. "Not logged in" is a free, instant signal (exit 1, `result: "Not logged in · Please run /login"`) mapped to `.notSignedIn`.
+
+**Readiness:** `claude auth status --json` is local, ~250ms, exit 0 either way, and returns `{loggedIn, authMethod, email, orgName, subscriptionType}`. Binary discovery never consults `PATH` (a GUI app gets a minimal one) and never spawns a login shell (that would execute the user's dotfiles in our process tree) — it probes fixed paths, `claudeCodePath` overriding.
+
+**Sign-in:** `claude auth login` needs a TTY, so `ClaudeCodeSignInLauncher` writes a `.command` script and hands it to Launch Services; the controller then polls availability every 2s for ~3 min.
+
+**Config keys:** `claude_code_path`, `claude_code_model`, `claude_code_timeout_seconds` (clamped 30–900 at decode), `post_processor_claude_code_model`.
+
+**Not supported in `muesli-cli`** — the headless CLI path doesn't share the hardened argv/env, so `claude_code` throws `.unavailable` there rather than running with weaker isolation.
+
+**Requires no App Sandbox.** Adding `com.apple.security.app-sandbox` would break this, `MeetingHookRunner`, and `ComputerUseBrowserAutomation` simultaneously.
 
 ## Meeting Export
 

@@ -791,6 +791,13 @@ enum CLISummaryClient {
                 transcript: transcript,
                 title: title
             )
+        case "claude_code":
+            // Deliberately not supported: the app-side backend shells out to the
+            // `claude` CLI with a hardened argument vector and sanitized
+            // environment, none of which this headless path shares. Reaching for
+            // `claude` here would silently run with different isolation than the
+            // app promises.
+            throw CLISummaryError.unavailable("The Claude Code summary backend is app-only. Select OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Muesli settings for `muesli-cli transcribe --summarize`.")
         default:
             throw CLISummaryError.unavailable("The configured ChatGPT session summary backend is app-only in headless CLI mode. Select OpenAI, OpenRouter, Ollama, LM Studio, or Custom LLM in Muesli settings for `muesli-cli transcribe --summarize`.")
         }

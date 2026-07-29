@@ -142,6 +142,11 @@ final class AppState {
     var dictationState: DictationState = .idle
     var isVoiceNoteRecording: Bool = false
     var isChatGPTAuthenticated: Bool = false
+    /// Install + sign-in state of the local Claude Code CLI. Refreshed on demand
+    /// rather than on every `syncAppState`, since probing spawns a process.
+    var claudeCodeAvailability: ClaudeCodeAvailability = .missing
+    var isClaudeCodeSignInPending: Bool = false
+    var claudeCodeSignInError: String?
     var isGoogleCalendarAvailable: Bool = false
     var isGoogleCalendarVerified: Bool = false
     var isGoogleCalendarAuthenticated: Bool = false
