@@ -229,11 +229,11 @@ enum ScreenContextCapture {
         if let shouldCapture, !(await shouldCapture()) {
             return nil
         }
-        guard let image = CGWindowListCreateImage(
-            .null,
-            .optionIncludingWindow,
-            windowID,
-            [.bestResolution, .boundsIgnoreFraming]
+        guard let image = LegacyWindowCapture.image(
+            bounds: .null,
+            listOption: .optionIncludingWindow,
+            windowID: windowID,
+            imageOption: [.bestResolution, .boundsIgnoreFraming]
         ) else {
             fputs("[muesli-native] screen context: screenshot capture failed\n", stderr)
             return nil
@@ -254,6 +254,20 @@ enum ScreenContextCapture {
         }
     }
 
+    /// Pins every stage of a Vision request to a CPU compute device, when the
+    /// request reports one. A request that offers no CPU device is left alone
+    /// rather than failing — Vision then picks its own device, as it did before.
+    private static func restrictToCPU(_ request: VNRequest) {
+        guard let supported = try? request.supportedComputeStageDevices else { return }
+        for (stage, devices) in supported {
+            guard let cpu = devices.first(where: { device in
+                if case .cpu = device { return true }
+                return false
+            }) else { continue }
+            request.setComputeDevice(cpu, for: stage)
+        }
+    }
+
     private static func ocrImage(_ image: CGImage) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             // Dispatch to background queue to avoid blocking the Swift cooperative thread pool
@@ -271,7 +285,10 @@ enum ScreenContextCapture {
                 }
                 request.recognitionLevel = .accurate
                 request.usesLanguageCorrection = true
-                request.usesCPUOnly = true
+                // Keep OCR off the Neural Engine so it cannot contend with the ASR
+                // models running there. `usesCPUOnly` said this before macOS 14;
+                // the compute-device API is its replacement.
+                restrictToCPU(request)
 
                 let handler = VNImageRequestHandler(cgImage: image, options: [:])
                 do {
