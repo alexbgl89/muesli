@@ -89,8 +89,14 @@ enum ContributionSocialShare {
     }
 
     static func formatCount(_ value: Int) -> String {
+        // Pinned to en_US: every string this count is embedded in is hardcoded
+        // English ("You crossed N words!", "I've dictated N words with Muesli"),
+        // so a Locale.current-grouped number would read inconsistently — and
+        // would make the shared message vary by machine. Not en_US_POSIX: that
+        // locale drops grouping separators entirely ("31000").
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
+        formatter.locale = Locale(identifier: "en_US")
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
     }
 }
