@@ -367,6 +367,48 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     }
 }
 
+/// A record of a meeting having been logged to a Salesforce activity (Task).
+public struct SalesforceLogEntry: Identifiable, Sendable, Equatable {
+    public let id: Int64
+    public let meetingID: Int64
+    public let taskID: String
+    public let targetID: String
+    /// "Contact" / "Lead" / "Opportunity".
+    public let targetType: String
+    public let targetName: String
+    public let instanceURL: String
+    public let includedTranscript: Bool
+    public let loggedAt: Double
+
+    public init(
+        id: Int64,
+        meetingID: Int64,
+        taskID: String,
+        targetID: String,
+        targetType: String,
+        targetName: String,
+        instanceURL: String,
+        includedTranscript: Bool,
+        loggedAt: Double
+    ) {
+        self.id = id
+        self.meetingID = meetingID
+        self.taskID = taskID
+        self.targetID = targetID
+        self.targetType = targetType
+        self.targetName = targetName
+        self.instanceURL = instanceURL
+        self.includedTranscript = includedTranscript
+        self.loggedAt = loggedAt
+    }
+
+    /// Deep link to the logged Task in Salesforce, if the instance URL is known.
+    public var recordURL: URL? {
+        guard !instanceURL.isEmpty, !taskID.isEmpty else { return nil }
+        return URL(string: "\(instanceURL)/\(taskID)")
+    }
+}
+
 public struct MeetingFolder: Identifiable, Codable, Sendable {
     public let id: Int64
     public var name: String

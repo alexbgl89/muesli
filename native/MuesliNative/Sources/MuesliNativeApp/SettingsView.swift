@@ -58,6 +58,9 @@ struct SettingsView: View {
     @State private var isSigningInChatGPT = false
     @State private var googleCalSignInError: String?
     @State private var isSigningInGoogleCal = false
+    @State private var salesforceSignInError: String?
+    @State private var isSigningInSalesforce = false
+    @State private var salesforceCLIOrgs: [SalesforceCLIBridge.CLIOrg] = []
     @State private var pendingDataDestruction: PendingDataDestruction?
     @State private var isShowingDictionaryAccessibilityPrompt = false
     @State private var isPreviewingClip = false
@@ -1292,6 +1295,8 @@ struct SettingsView: View {
 
             meetingSummarySettingsSection
 
+            salesforceSettingsSection
+
             settingsSection("Meeting Notes") {
                 settingsRow("Default template", controlWidth: meetingControlWidth) {
                     meetingTemplateMenu(selectionID: appState.config.defaultMeetingTemplateID) { id in
@@ -1681,6 +1686,162 @@ struct SettingsView: View {
 
                 if let chatGPTSignInError {
                     Text(chatGPTSignInError)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
+            }
+        }
+    }
+
+    private var salesforceAuthMode: SalesforceAuthMode {
+        SalesforceAuthMode(rawValue: appState.config.salesforceAuthMode) ?? .app
+    }
+
+    @ViewBuilder
+    private var salesforceSettingsSection: some View {
+        settingsSection("Salesforce") {
+            if controller.isSalesforceCLIAvailable {
+                settingsRow("Method", controlWidth: meetingControlWidth) {
+                    Picker("", selection: Binding(
+                        get: { appState.config.salesforceAuthMode },
+                        set: { val in controller.updateConfig { $0.salesforceAuthMode = val } }
+                    )) {
+                        Text("Connected App").tag(SalesforceAuthMode.app.rawValue)
+                        Text("Salesforce CLI").tag(SalesforceAuthMode.cli.rawValue)
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                }
+                Divider().background(MuesliTheme.surfaceBorder)
+            }
+
+            if salesforceAuthMode == .cli {
+                salesforceCLIControls
+            } else {
+                salesforceConnectedAppControls
+            }
+
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Attach transcript") {
+                settingsSwitch(isOn: appState.config.salesforceAttachTranscript) { newValue in
+                    controller.updateConfig { $0.salesforceAttachTranscript = newValue }
+                }
+            }
+            settingsDescription("Upload the full transcript as a file alongside the logged meeting (summary is always included).")
+        }
+        .task(id: salesforceAuthMode) {
+            if salesforceAuthMode == .cli {
+                salesforceCLIOrgs = await controller.listSalesforceCLIOrgs()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var salesforceConnectedAppControls: some View {
+        settingsRow("Consumer Key", controlWidth: meetingControlWidth) {
+            PastableSecureField(
+                text: appState.config.salesforceConsumerKey,
+                placeholder: "Connected App consumer key",
+                onChange: { val in controller.updateConfig { $0.salesforceConsumerKey = val } }
+            )
+            .frame(height: 22)
+        }
+        settingsDescription("From your Salesforce External Client App. It's a client_id, not a secret — Muesli bundles no credentials.")
+        Divider().background(MuesliTheme.surfaceBorder)
+        settingsRow("Login host", controlWidth: meetingControlWidth) {
+            TextField(
+                "login.salesforce.com",
+                text: Binding(
+                    get: { appState.config.salesforceLoginHost },
+                    set: { val in controller.updateConfig { $0.salesforceLoginHost = val } }
+                )
+            )
+            .textFieldStyle(.plain)
+            .multilineTextAlignment(.trailing)
+            .font(MuesliTheme.body())
+            .foregroundStyle(MuesliTheme.textPrimary)
+        }
+        settingsDescription("Use test.salesforce.com for a sandbox, or your My Domain host.")
+        Divider().background(MuesliTheme.surfaceBorder)
+        settingsRow("Account") {
+            salesforceAccountControl()
+        }
+    }
+
+    @ViewBuilder
+    private var salesforceCLIControls: some View {
+        settingsRow("Org", controlWidth: meetingControlWidth) {
+            Picker("", selection: Binding(
+                get: { appState.config.salesforceCLIOrg },
+                set: { val in controller.updateConfig { $0.salesforceCLIOrg = val } }
+            )) {
+                if salesforceCLIOrgs.isEmpty {
+                    Text("No connected orgs").tag("")
+                } else {
+                    Text("Select an org…").tag("")
+                    ForEach(salesforceCLIOrgs) { org in
+                        Text(org.display).tag(org.username)
+                    }
+                }
+            }
+            .labelsHidden()
+        }
+        settingsDescription("Reuses your local Salesforce CLI session — no Connected App needed. Run `sf org login web` to add orgs.")
+    }
+
+    @ViewBuilder
+    private func salesforceAccountControl() -> some View {
+        if appState.isSalesforceAuthenticated {
+            Button {
+                controller.signOutSalesforce()
+            } label: {
+                Text("Connected · Disconnect")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.success)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .buttonStyle(.plain)
+        } else if isSigningInSalesforce {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Connecting…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                let hasKey = !appState.config.salesforceConsumerKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                Button {
+                    isSigningInSalesforce = true
+                    salesforceSignInError = nil
+                    Task {
+                        let error = await controller.signInWithSalesforce()
+                        isSigningInSalesforce = false
+                        salesforceSignInError = error
+                    }
+                } label: {
+                    Text("Connect Salesforce")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(hasKey ? MuesliTheme.accent : MuesliTheme.textTertiary)
+                        .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasKey)
+
+                if let salesforceSignInError {
+                    Text(salesforceSignInError)
                         .font(.system(size: 10))
                         .foregroundStyle(.red)
                         .lineLimit(2)
