@@ -91,6 +91,9 @@ enum MeetingSummaryRetryPolicy {
         return normalized == MeetingSummaryBackendOption.ollama.backend
             || normalized == MeetingSummaryBackendOption.lmStudio.backend
             || normalized == "lm studio"
+            // Each Claude Code retry is a fresh process launch plus subscription
+            // tokens, so it takes the capped local retry budget.
+            || normalized == ClaudeCodeCLIBridge.displayLabel.lowercased()
     }
 
     private static func isLocalEndpointUnavailable(_ error: Error) -> Bool {
@@ -135,6 +138,15 @@ enum MeetingSummaryClient {
     private static let lmStudioTitleTimeout: TimeInterval = 120
     private static let customLLMSummaryTimeout: TimeInterval = 300
     private static let customLLMTitleTimeout: TimeInterval = 120
+    private static let claudeCodeTitleTimeout: TimeInterval = 120
+
+    /// Test seam: `MeetingSummaryClient` is an enum of statics and cannot take
+    /// constructor injection, matching `ComputerUseBrowserAutomation`'s hook.
+    static var claudeCodeBridgeForTests: ClaudeCodeSummarizing?
+
+    private static var claudeCodeBridge: ClaudeCodeSummarizing {
+        claudeCodeBridgeForTests ?? ClaudeCodeCLIBridge.shared
+    }
 
     private static let titleInstructions = """
     Generate a short, descriptive meeting title (3-7 words) from these transcript excerpts. \
@@ -215,6 +227,19 @@ enum MeetingSummaryClient {
         let generatedNotes: String
         if backend == MeetingSummaryBackendOption.chatGPT.backend {
             generatedNotes = try await summarizeWithChatGPT(
+                transcript: transcript,
+                meetingTitle: meetingTitle,
+                existingNotes: existingNotes,
+                manualNotes: manualNotesToRetain,
+                config: config,
+                template: template,
+                visualContext: visualContext,
+                previousMeetingNotes: previousMeetingNotes
+            )
+            return notesByRetainingManualNotes(generatedNotes: generatedNotes, manualNotes: manualNotesToRetain)
+        }
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            generatedNotes = try await summarizeWithClaudeCode(
                 transcript: transcript,
                 meetingTitle: meetingTitle,
                 existingNotes: existingNotes,
@@ -792,6 +817,73 @@ enum MeetingSummaryClient {
         }
     }
 
+    /// Runs the prompt through the local Claude Code CLI. Instructions become the
+    /// child's system prompt and the transcript goes on stdin, so this reuses the
+    /// same template-driven prompt every other backend gets.
+    private static func summarizeWithClaudeCode(
+        transcript: String,
+        meetingTitle: String,
+        existingNotes: String?,
+        manualNotes: String?,
+        config: AppConfig,
+        template: MeetingTemplateSnapshot,
+        visualContext: String?,
+        previousMeetingNotes: String?
+    ) async throws -> String {
+        let instructions = summaryInstructions(
+            for: template,
+            existingNotes: existingNotes,
+            manualNotes: manualNotes,
+            previousMeetingNotes: previousMeetingNotes
+        )
+        let userPrompt = summaryUserPrompt(
+            transcript: transcript,
+            meetingTitle: meetingTitle,
+            existingNotes: existingNotes,
+            manualNotes: manualNotes,
+            visualContext: visualContext,
+            previousMeetingNotes: previousMeetingNotes
+        )
+
+        do {
+            return try await claudeCodeBridge.complete(
+                instructions: instructions,
+                userPrompt: userPrompt,
+                model: ClaudeCodeCLIBridge.resolvedModel(config.claudeCodeModel),
+                timeout: ClaudeCodeCLIBridge.resolvedTimeout(config.claudeCodeTimeoutSeconds),
+                config: config
+            )
+        } catch let error as ClaudeCodeCLIError {
+            throw mapClaudeCodeError(error)
+        }
+    }
+
+    /// Maps CLI failures onto `MeetingSummaryError` so the retry policy and the
+    /// existing failure UI keep working unchanged.
+    private static func mapClaudeCodeError(_ error: ClaudeCodeCLIError) -> MeetingSummaryError {
+        let backend = ClaudeCodeCLIBridge.displayLabel
+        switch error {
+        case .emptyResult:
+            return .emptyResponse(backend: backend)
+        case .apiError(let status, let message):
+            return .backendFailed(backend: backend, statusCode: status, message: message)
+        case .commandFailed(_, let message):
+            return .backendFailed(backend: backend, statusCode: nil, message: message)
+        case .notInstalled, .notSignedIn, .invalidBinaryPath, .launchFailed, .timedOut, .invalidOutput:
+            // Permanent for this run: retrying a missing binary or a missing
+            // sign-in only burns time, so these surface as non-transient.
+            return .backendFailed(
+                backend: backend,
+                statusCode: nil,
+                message: error.errorDescription ?? "Claude Code failed."
+            )
+        }
+    }
+
+    static func claudeCodeHasRequiredSettings(config: AppConfig) -> Bool {
+        ClaudeCodeCLIBridge.shared.isInstalled(config: config)
+    }
+
     static func customLLMRequiresAPIKey(config: AppConfig) -> Bool {
         (CustomLLMFormat(rawValue: config.customLLMFormat) ?? .openAI) == .anthropic
     }
@@ -1120,6 +1212,10 @@ enum MeetingSummaryClient {
             )
         }
 
+        if backend == MeetingSummaryBackendOption.claudeCode.backend {
+            return await generateTitleWithClaudeCode(transcript: excerpt, config: config)
+        }
+
         if backend == MeetingSummaryBackendOption.ollama.backend {
             return await generateTitleWithOllama(transcript: excerpt, config: config)
         }
@@ -1275,6 +1371,22 @@ enum MeetingSummaryClient {
                 .trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"")))
         } catch {
             fputs("[summary] Anthropic title generation failed: \(error)\n", stderr)
+            return nil
+        }
+    }
+
+    private static func generateTitleWithClaudeCode(transcript: String, config: AppConfig) async -> String? {
+        do {
+            let title = try await claudeCodeBridge.complete(
+                instructions: titleInstructions,
+                userPrompt: transcript,
+                model: ClaudeCodeCLIBridge.resolvedModel(config.claudeCodeModel),
+                timeout: claudeCodeTitleTimeout,
+                config: config
+            )
+            return title.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            fputs("[summary] Claude Code title generation failed: \(error.localizedDescription)\n", stderr)
             return nil
         }
     }

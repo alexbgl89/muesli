@@ -258,6 +258,9 @@ struct SettingsView: View {
                 if appState.selectedMeetingSummaryBackend == .openRouter {
                     loadOpenRouterFreeModelsIfNeeded()
                 }
+                // The user may have installed or signed into the CLI since the
+                // last probe, so never trust the cached value here.
+                controller.refreshClaudeCodeAvailability(forceRefresh: true)
                 scrollToFeatureTourTarget(activeFeatureTourTarget, using: scrollProxy)
             }
             .onDisappear {
@@ -290,6 +293,9 @@ struct SettingsView: View {
                 guard appState.selectedTab == .settings else { return }
                 refreshAudioInputDevices()
                 refreshPermissionStatuses(refreshLaunchAtLogin: true)
+                // Returning from the sign-in terminal window should update the
+                // Claude Code status row without a manual re-check.
+                controller.refreshClaudeCodeAvailability(forceRefresh: true)
             }
             .onChange(of: appState.selectedBackend) { _, _ in
                 refreshDownloadedModelOptions()
@@ -300,6 +306,9 @@ struct SettingsView: View {
             .onChange(of: appState.selectedMeetingSummaryBackend) { _, backend in
                 if backend == .openRouter {
                     loadOpenRouterFreeModelsIfNeeded()
+                }
+                if backend == .claudeCode {
+                    controller.refreshClaudeCodeAvailability(forceRefresh: true)
                 }
             }
             .alert(
@@ -919,6 +928,22 @@ struct SettingsView: View {
                     presets: SummaryModelPreset.chatGPTTranscriptCleanupModels
                 ) { controller.updatePostProcessorModel($0, for: backend) }
             }
+        case .some(.claudeCode):
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Claude Code", controlWidth: meetingControlWidth) {
+                claudeCodeAccountControl(availability: appState.claudeCodeAvailability)
+            }
+            settingsDescription(claudeCodeStatusDescription(appState.claudeCodeAvailability))
+            Divider().background(MuesliTheme.surfaceBorder)
+            settingsRow("Cleanup model", controlWidth: meetingControlWidth) {
+                settingsModelMenu(
+                    currentModel: appState.config.postProcessorClaudeCodeModel,
+                    presets: SummaryModelPreset.claudeCodeModels
+                ) { controller.updatePostProcessorModel($0, for: backend) }
+            }
+            settingsDescription(
+                "Each cleanup spawns a Claude Code process, which adds a couple of seconds. Best suited to meeting transcripts rather than short dictations."
+            )
         case .some(.openAI):
             Divider().background(MuesliTheme.surfaceBorder)
             settingsRow("API Key", controlWidth: meetingControlWidth) {
@@ -1066,6 +1091,11 @@ struct SettingsView: View {
                         presets: SummaryModelPreset.chatGPTModels
                     ) { val in controller.updateConfig { $0.chatGPTModel = val } }
                 }
+            } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+                claudeCodeSettingsRows(
+                    model: appState.config.claudeCodeModel,
+                    onModelChange: { val in controller.updateConfig { $0.claudeCodeModel = val } }
+                )
             } else if appState.selectedMeetingSummaryBackend == .openAI {
                 settingsRow("API Key", controlWidth: meetingControlWidth) {
                     PastableSecureField(
@@ -1179,6 +1209,126 @@ struct SettingsView: View {
                     ? "claude-3-5-sonnet-20241022"
                     : "custom-model-id"
             ) { val in onModelChange(val) }
+        }
+    }
+
+    @ViewBuilder
+    private func claudeCodeSettingsRows(model: String, onModelChange: @escaping (String) -> Void) -> some View {
+        let availability = appState.claudeCodeAvailability
+        settingsRow("Claude Code", controlWidth: meetingControlWidth) {
+            claudeCodeAccountControl(availability: availability)
+        }
+        settingsDescription(claudeCodeStatusDescription(availability))
+        Divider().background(MuesliTheme.surfaceBorder)
+        settingsRow("Model", controlWidth: meetingControlWidth) {
+            settingsModelMenu(
+                currentModel: model,
+                presets: SummaryModelPreset.claudeCodeModels,
+                onChange: onModelChange
+            )
+        }
+        Divider().background(MuesliTheme.surfaceBorder)
+        settingsRow("CLI path", controlWidth: meetingControlWidth) {
+            PastableTextField(
+                text: appState.config.claudeCodePath,
+                placeholder: availability.binaryPath ?? "Auto-detect",
+                onChange: { val in
+                    controller.updateConfig { $0.claudeCodePath = val }
+                    controller.refreshClaudeCodeAvailability(forceRefresh: true)
+                }
+            )
+            .frame(height: 22)
+        }
+        settingsDescription(
+            "Leave empty to auto-detect. Summaries run through your local Claude Code with all tools disabled, so meeting transcripts are never exposed to file or shell access."
+        )
+    }
+
+    @ViewBuilder
+    private func claudeCodeAccountControl(availability: ClaudeCodeAvailability) -> some View {
+        if availability.isReady {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(MuesliTheme.success)
+                    .frame(width: 7, height: 7)
+                Text(availability.accountEmail ?? "Signed in")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        } else if appState.isClaudeCodeSignInPending {
+            HStack(spacing: 6) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Waiting for sign-in...")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MuesliTheme.textSecondary)
+                Button("Cancel") { controller.cancelClaudeCodeSignIn() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .foregroundStyle(MuesliTheme.accent)
+            }
+        } else if availability.isInstalled {
+            Button {
+                controller.signInToClaudeCode()
+            } label: {
+                Text("Sign In")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.backgroundBase)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.accent)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+            }
+            .buttonStyle(.plain)
+            .help("Opens Claude Code sign-in in your terminal")
+        } else {
+            Button {
+                controller.refreshClaudeCodeAvailability(forceRefresh: true)
+            } label: {
+                Text("Re-check")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(MuesliTheme.textPrimary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(MuesliTheme.surfacePrimary)
+                    .clipShape(RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: MuesliTheme.cornerSmall)
+                            .strokeBorder(MuesliTheme.surfaceBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Check again for a local Claude Code install")
+        }
+    }
+
+    private func claudeCodeStatusDescription(_ availability: ClaudeCodeAvailability) -> String {
+        if let error = appState.claudeCodeSignInError {
+            return error
+        }
+        if let problem = availability.problem {
+            return problem
+        }
+        switch availability.state {
+        case .missing:
+            return "Claude Code isn't installed. Install it from claude.com/product/claude-code, then choose Re-check."
+        case .notSignedIn:
+            return "Claude Code is installed but not signed in. Sign In opens a terminal window to connect your Claude account."
+        case .ready:
+            var parts: [String] = []
+            if let subscription = availability.subscriptionType, !subscription.isEmpty {
+                parts.append("\(subscription.capitalized) plan")
+            }
+            if let organization = availability.organizationName, !organization.isEmpty {
+                parts.append(organization)
+            }
+            let account = parts.isEmpty ? "" : " (\(parts.joined(separator: " · ")))"
+            return "Summaries run on your Claude subscription\(account) — no API key and no extra usage billing."
         }
     }
 

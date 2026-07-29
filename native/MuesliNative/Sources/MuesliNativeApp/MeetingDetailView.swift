@@ -1341,6 +1341,8 @@ struct MeetingDetailView: View {
         let config = appState.config
         if appState.selectedMeetingSummaryBackend == .chatGPT {
             return appState.isChatGPTAuthenticated
+        } else if appState.selectedMeetingSummaryBackend == .claudeCode {
+            return MeetingSummaryClient.claudeCodeHasRequiredSettings(config: config)
         } else if appState.selectedMeetingSummaryBackend == .openAI {
             return !config.openAIAPIKey.isEmpty || ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil
         } else if appState.selectedMeetingSummaryBackend == .ollama {

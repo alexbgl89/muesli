@@ -310,6 +310,7 @@ final class MuesliController: NSObject {
     private var meetingDetectionMonitorStarted = false
 
     private var searchTask: Task<Void, Never>?
+    private var claudeCodeSignInPollTask: Task<Void, Never>?
     private var onboardingModelPreparationTask: Task<Void, Never>?
     private var maraudersMapCountdown: MaraudersMapCountdownController?
 
@@ -2293,6 +2294,8 @@ final class MuesliController: NSObject {
                 config.postProcessorLMStudioModel = model
             case .some(.customLLM):
                 config.postProcessorCustomLLMModel = model
+            case .some(.claudeCode):
+                config.postProcessorClaudeCodeModel = model
             default:
                 break
             }
@@ -2551,6 +2554,67 @@ final class MuesliController: NSObject {
         plain.formatOptions = [.withInternetDateTime]
         if let date = plain.date(from: startTime) { return date }
         return Date()
+    }
+
+    // MARK: - Claude Code
+
+    /// Filesystem-only check, safe to call from a SwiftUI body.
+    var isClaudeCodeCLIInstalled: Bool {
+        ClaudeCodeCLIBridge.shared.isInstalled(config: config)
+    }
+
+    /// Re-probes install + sign-in state and publishes it to `AppState`.
+    func refreshClaudeCodeAvailability(forceRefresh: Bool = false) {
+        Task { [weak self] in
+            guard let self else { return }
+            let availability = await ClaudeCodeCLIBridge.shared.availability(
+                config: config,
+                forceRefresh: forceRefresh
+            )
+            appState.claudeCodeAvailability = availability
+        }
+    }
+
+    /// Opens `claude auth login` in the user's terminal, then polls until the
+    /// account shows up. The CLI login flow needs a TTY and a browser, so it
+    /// cannot be driven headlessly from here.
+    func signInToClaudeCode() {
+        guard let binaryPath = ClaudeCodeCLIBridge.shared.binaryPath(config: config) else {
+            appState.claudeCodeSignInError = ClaudeCodeCLIError.notInstalled.errorDescription
+            return
+        }
+        appState.claudeCodeSignInError = nil
+        do {
+            try ClaudeCodeSignInLauncher.launch(binaryPath: binaryPath)
+        } catch {
+            appState.claudeCodeSignInError = error.localizedDescription
+            return
+        }
+
+        claudeCodeSignInPollTask?.cancel()
+        appState.isClaudeCodeSignInPending = true
+        claudeCodeSignInPollTask = Task { [weak self] in
+            guard let self else { return }
+            defer { appState.isClaudeCodeSignInPending = false }
+            // Sign-in happens in another window at human speed; poll for a few
+            // minutes and stop rather than waiting forever.
+            for _ in 0..<90 {
+                try? await Task.sleep(for: .seconds(2))
+                if Task.isCancelled { return }
+                let availability = await ClaudeCodeCLIBridge.shared.availability(
+                    config: config,
+                    forceRefresh: true
+                )
+                appState.claudeCodeAvailability = availability
+                if availability.isReady { return }
+            }
+        }
+    }
+
+    func cancelClaudeCodeSignIn() {
+        claudeCodeSignInPollTask?.cancel()
+        claudeCodeSignInPollTask = nil
+        appState.isClaudeCodeSignInPending = false
     }
 
     // MARK: - Google Calendar
@@ -3978,7 +4042,16 @@ final class MuesliController: NSObject {
             Task { await signInWithChatGPT() }
             return
         }
+        if option == .claudeCode, !isClaudeCodeCLIInstalled {
+            presentHistoryWindow(tab: .settings)
+            appState.selectedSettingsPane = .meetings
+            refreshClaudeCodeAvailability(forceRefresh: true)
+            return
+        }
         selectMeetingSummaryBackend(option)
+        if option == .claudeCode {
+            refreshClaudeCodeAvailability(forceRefresh: true)
+        }
     }
 
     func resummarize(meeting: MeetingRecord, completion: @escaping (Result<Void, Error>) -> Void) {

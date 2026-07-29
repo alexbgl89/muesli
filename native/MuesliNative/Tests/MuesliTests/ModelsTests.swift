@@ -555,10 +555,11 @@ struct MeetingSummaryBackendTests {
 
     @Test("all options listed")
     func allOptions() {
-        #expect(MeetingSummaryBackendOption.all.count == 6)
+        #expect(MeetingSummaryBackendOption.all.count == 7)
         #expect(MeetingSummaryBackendOption.all.contains(.openAI))
         #expect(MeetingSummaryBackendOption.all.contains(.openRouter))
         #expect(MeetingSummaryBackendOption.all.contains(.chatGPT))
+        #expect(MeetingSummaryBackendOption.all.contains(.claudeCode))
         #expect(MeetingSummaryBackendOption.all.contains(.ollama))
         #expect(MeetingSummaryBackendOption.all.contains(.lmStudio))
         #expect(MeetingSummaryBackendOption.all.contains(.customLLM))
@@ -571,6 +572,7 @@ struct MeetingSummaryBackendTests {
         #expect(MeetingSummaryBackendOption.ollama.backend == "ollama")
         #expect(MeetingSummaryBackendOption.lmStudio.backend == "lmstudio")
         #expect(MeetingSummaryBackendOption.customLLM.backend == "custom_llm")
+        #expect(MeetingSummaryBackendOption.claudeCode.backend == "claude_code")
     }
 
     @Test("configured values resolve with ChatGPT fallback")
@@ -580,6 +582,7 @@ struct MeetingSummaryBackendTests {
         #expect(MeetingSummaryBackendOption.resolved("ollama") == .ollama)
         #expect(MeetingSummaryBackendOption.resolved("lmstudio") == .lmStudio)
         #expect(MeetingSummaryBackendOption.resolved("custom_llm") == .customLLM)
+        #expect(MeetingSummaryBackendOption.resolved("claude_code") == .claudeCode)
         #expect(MeetingSummaryBackendOption.resolved("unknown") == .chatGPT)
         #expect(MeetingSummaryBackendOption.resolved(nil) == .chatGPT)
     }
