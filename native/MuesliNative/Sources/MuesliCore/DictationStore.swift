@@ -2533,7 +2533,6 @@ public final class DictationStore {
         }
     }
 
-    @discardableResult
     // MARK: - Salesforce activity log
 
     public func recordSalesforceLog(
@@ -2601,6 +2600,7 @@ public final class DictationStore {
         return results
     }
 
+    @discardableResult
     public func createFolder(name: String, parentID: Int64? = nil) throws -> Int64 {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
