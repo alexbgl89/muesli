@@ -114,8 +114,13 @@ final class AudioProcessAttributionCollector {
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
-        var value: CFString?
-        var dataSize = UInt32(MemoryLayout<CFString?>.size)
+        // CoreAudio writes a +1 retained CFStringRef into this slot. Handing it an
+        // ARC-managed `CFString?` means taking a raw pointer to a managed
+        // reference, which the compiler flags and which only balanced out by
+        // accident. `Unmanaged` states the ownership transfer explicitly, and
+        // `takeRetainedValue()` consumes the +1 the caller is responsible for.
+        var value: Unmanaged<CFString>?
+        var dataSize = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         guard AudioObjectGetPropertyData(
             objectID,
             &address,
@@ -123,10 +128,10 @@ final class AudioProcessAttributionCollector {
             nil,
             &dataSize,
             &value
-        ) == noErr else {
+        ) == noErr, let value else {
             return nil
         }
-        return value as String?
+        return value.takeRetainedValue() as String
     }
 
     private func boolProperty(_ selector: AudioObjectPropertySelector, objectID: AudioObjectID) -> Bool {

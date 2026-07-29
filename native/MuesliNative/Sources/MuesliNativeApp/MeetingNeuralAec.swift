@@ -397,10 +397,9 @@ final class MeetingNeuralAec {
     private func trimHistoryBuffersIfNeeded() {
         let maxCandidateDelaySamples = delayEstimator.maxCandidateDelaySamples
         let retentionSamples = delayEstimator.windowSamples + maxCandidateDelaySamples
-        let latestComparableSystemSample = min(systemAbsoluteEndSample, micSamplesReceived - maxCandidateDelaySamples)
-        let oldestNeededForEstimator = latestComparableSystemSample > 0
-            ? max(0, latestComparableSystemSample - delayEstimator.windowSamples)
-            : max(0, systemSamplesReceived - retentionSamples)
+        // No separate estimator floor is computed here: retentionSamples is sized as
+        // windowSamples + maxCandidateDelaySamples, so the retention floors below
+        // already cover everything the delay estimator can use.
         // AEC constraint: only protect system samples that queued mic frames actually need.
         // When the pending buffer is empty there is nothing to protect, so trim freely.
         let oldestNeededForAec = pendingMicSamples.isEmpty
