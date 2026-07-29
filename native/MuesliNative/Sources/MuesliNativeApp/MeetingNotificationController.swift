@@ -383,10 +383,16 @@ final class MeetingNotificationController {
 
     private func animateOut(completion: @escaping () -> Void) {
         guard let panel else { completion(); return }
+        // AppKit declares `completionHandler` as `@Sendable`, but documents that it
+        // runs on the main thread once the animation group finishes — which is the
+        // same actor every caller here already lives on. Boxing keeps that
+        // assumption in one place instead of forcing `@Sendable` onto every
+        // caller's main-actor closure.
+        let boxed = UncheckedSendable(completion)
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.2
             panel.animator().alphaValue = 0
-        }, completionHandler: completion)
+        }, completionHandler: { boxed.value() })
     }
 
     @objc private func handleStartRecording() {
