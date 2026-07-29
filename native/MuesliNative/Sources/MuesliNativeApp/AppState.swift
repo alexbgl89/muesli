@@ -110,6 +110,10 @@ final class AppState {
     var folders: [MeetingFolder] = []
     var selectedFolderID: Int64?  // nil = "All Meetings"
     var meetingsNavigationState: MeetingsNavigationState = .browser
+    var meetingsViewMode: MeetingsViewMode = .list
+    /// Lightweight metadata for every meeting in scope, loaded only while the
+    /// calendar view is active so the month grid can cover the full history.
+    var meetingCalendarEntries: [MeetingCalendarEntry] = []
     var meetingNotesFocusRequest = 0
     var isMeetingTemplatesManagerPresented: Bool = false
     var dictationStats: DictationStats = DictationStats(

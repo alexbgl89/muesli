@@ -195,6 +195,7 @@ struct MeetingsView: View {
     let controller: MuesliController
     @State private var selectedFilter: MeetingBrowserFilter = .all
     @State private var selectedSort: MeetingBrowserSort = .newestFirst
+    @State private var visibleCalendarMonth: Date = MeetingCalendarLogic.monthStart(containing: Date())
 
     private var scopedMeetings: [MeetingRecord] {
         appState.meetingRows
@@ -223,6 +224,33 @@ struct MeetingsView: View {
 
     private var activeLiveMeeting: MeetingRecord? {
         controller.activeLiveMeetingRecord()
+    }
+
+    // MARK: - Calendar mode
+
+    private var isCalendarMode: Bool {
+        appState.meetingsViewMode == .calendar
+    }
+
+    /// Timed, unhidden events from the upcoming window. The calendar shows these
+    /// alongside stored meetings so scheduled work is visible in place.
+    private var scheduledCalendarEvents: [UnifiedCalendarEvent] {
+        appState.upcomingCalendarEvents.filter {
+            !$0.isAllDay && !appState.hiddenCalendarEventIDs.contains($0.id)
+        }
+    }
+
+    private var calendarMonth: MeetingCalendarMonth {
+        MeetingCalendarLogic.month(
+            containing: visibleCalendarMonth,
+            entries: appState.meetingCalendarEntries,
+            scheduledEvents: scheduledCalendarEvents,
+            hiddenEventIDs: appState.hiddenCalendarEventIDs
+        )
+    }
+
+    private var latestMeetingMonth: Date? {
+        MeetingCalendarLogic.mostRecentMeetingMonth(entries: appState.meetingCalendarEntries)
     }
 
     var body: some View {
@@ -260,7 +288,9 @@ struct MeetingsView: View {
         ScrollView {
             let presentation = browserPresentation
             VStack(alignment: .leading, spacing: MuesliTheme.spacing24) {
-                if !appState.upcomingCalendarEvents.isEmpty {
+                // The calendar already shows scheduled events in place, so the
+                // Coming Up strip would only repeat them.
+                if !isCalendarMode, !appState.upcomingCalendarEvents.isEmpty {
                     comingUpSection
                 }
 
@@ -275,9 +305,13 @@ struct MeetingsView: View {
                     activeMeetingBanner(activeLiveMeeting)
                 }
 
-                browserHeader(meetingCount: presentation.meetings.count)
+                browserHeader(meetingCount: isCalendarMode
+                    ? appState.meetingCalendarEntries.count
+                    : presentation.meetings.count)
 
-                if presentation.meetings.isEmpty {
+                if isCalendarMode {
+                    calendarSection
+                } else if presentation.meetings.isEmpty {
                     emptyState
                 } else {
                     LazyVStack(spacing: MuesliTheme.spacing12) {
@@ -319,6 +353,44 @@ struct MeetingsView: View {
                 }
             }
             return true
+        }
+    }
+
+    // MARK: - Calendar
+
+    @ViewBuilder
+    private var calendarSection: some View {
+        if appState.meetingCalendarEntries.isEmpty, scheduledCalendarEvents.isEmpty {
+            emptyState
+        } else {
+            MeetingCalendarView(
+                month: calendarMonth,
+                selectedMeetingID: appState.selectedMeetingID,
+                latestMeetingMonth: latestMeetingMonth,
+                canStartMeeting: !appState.isMeetingRecording && !appState.isMeetingStarting,
+                onSelectMeeting: { controller.showMeetingDocument(id: $0) },
+                onStepMonth: { step in
+                    visibleCalendarMonth = MeetingCalendarLogic.month(
+                        byAdding: step,
+                        to: visibleCalendarMonth
+                    )
+                },
+                onGoToMonth: { date in
+                    visibleCalendarMonth = MeetingCalendarLogic.monthStart(containing: date)
+                },
+                onJoinAndRecord: { event in
+                    guard let meetingURL = event.meetingURL else { return }
+                    controller.joinAndRecord(
+                        title: event.title,
+                        meetingURL: meetingURL,
+                        endDate: event.endDate,
+                        calendarEventID: event.id
+                    )
+                },
+                onCreateNote: { event in
+                    controller.createMeetingFromCalendarEvent(event, folderID: appState.selectedFolderID)
+                }
+            )
         }
     }
 
@@ -598,7 +670,9 @@ struct MeetingsView: View {
                 .foregroundStyle(MuesliTheme.textTertiary)
                 .fixedSize()
 
-            Text("Open a meeting to review notes, transcript, and template-driven summaries")
+            Text(isCalendarMode
+                ? "Click an entry to open its notes, or a day to see everything on it"
+                : "Open a meeting to review notes, transcript, and template-driven summaries")
                 .font(MuesliTheme.callout())
                 .foregroundStyle(MuesliTheme.textTertiary)
         }
@@ -654,8 +728,12 @@ struct MeetingsView: View {
             .help("Import an audio file for offline transcription")
             .fixedSize()
 
-            sortButton
-            dateFilterButton
+            viewModeToggle
+
+            if !isCalendarMode {
+                sortButton
+                dateFilterButton
+            }
 
             Button {
                 controller.showMeetingTemplatesManager()
@@ -779,6 +857,39 @@ struct MeetingsView: View {
     private func activeMeetingStatusColor(for meeting: MeetingRecord) -> Color {
         guard meeting.status == .recording else { return MuesliTheme.accent }
         return appState.isMeetingRecordingPaused ? MuesliTheme.transcribing : MuesliTheme.recording
+    }
+
+    @ViewBuilder
+    private var viewModeToggle: some View {
+        HStack(spacing: 2) {
+            ForEach(MeetingsViewMode.allCases, id: \.self) { mode in
+                let isActive = appState.meetingsViewMode == mode
+                Button {
+                    controller.setMeetingsViewMode(mode)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: mode.systemImage)
+                            .font(.system(size: 10, weight: .semibold))
+                        Text(mode.label)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(isActive ? MuesliTheme.backgroundBase : MuesliTheme.textSecondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(isActive ? MuesliTheme.accent : Color.clear)
+                    .clipShape(Capsule())
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("Show meetings as a \(mode.label.lowercased())")
+                .accessibilityLabel("\(mode.label) view")
+                .accessibilityAddTraits(isActive ? [.isSelected] : [])
+            }
+        }
+        .padding(2)
+        .background(MuesliTheme.surfacePrimary.opacity(0.5))
+        .clipShape(Capsule())
+        .fixedSize()
     }
 
     @ViewBuilder

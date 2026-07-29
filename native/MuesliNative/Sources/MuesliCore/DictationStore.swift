@@ -567,6 +567,85 @@ public final class DictationStore {
         return rows
     }
 
+    /// Meeting metadata for every stored meeting, without transcripts or notes.
+    /// The calendar grid needs full history coverage, which the paged
+    /// `recentMeetings` fetch cannot provide, so this query stays deliberately
+    /// narrow: seven small columns per row.
+    public func meetingCalendarEntries(
+        folderID: Int64? = nil,
+        origin: RecordOriginFilter = .all,
+        limit: Int? = nil
+    ) throws -> [MeetingCalendarEntry] {
+        let db = try openDatabase()
+        defer { sqlite3_close(db) }
+
+        let originCondition: String
+        switch origin {
+        case .all:
+            originCondition = ""
+        case .thisMac:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) <> 'ios'"
+        case .fromIPhone:
+            originCondition = " AND LOWER(TRIM(COALESCE(source, ''))) = 'ios'"
+        }
+
+        let columns = "id, title, start_time, duration_seconds, meeting_status, source, calendar_event_id, folder_id"
+        var sql: String
+        if folderID != nil {
+            // Same recursive CTE as `recentMeetings`: the selected folder plus
+            // every descendant, without one placeholder per folder.
+            sql = """
+                WITH RECURSIVE folder_tree(id) AS (
+                    SELECT id FROM meeting_folders WHERE id = ?
+                    UNION
+                    SELECT mf.id FROM meeting_folders mf
+                    JOIN folder_tree ft ON mf.parent_id = ft.id
+                )
+                SELECT \(columns) FROM meetings
+                WHERE folder_id IN (SELECT id FROM folder_tree) AND deleted_at IS NULL\(originCondition)
+                ORDER BY start_time DESC, id DESC
+                """
+        } else {
+            sql = """
+                SELECT \(columns) FROM meetings
+                WHERE deleted_at IS NULL\(originCondition)
+                ORDER BY start_time DESC, id DESC
+                """
+        }
+        if limit != nil { sql += " LIMIT ?" }
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw lastError(db)
+        }
+        defer { sqlite3_finalize(statement) }
+        var bindIndex: Int32 = 1
+        if let folderID {
+            sqlite3_bind_int64(statement, bindIndex, folderID)
+            bindIndex += 1
+        }
+        if let limit {
+            sqlite3_bind_int(statement, bindIndex, Int32(limit))
+        }
+
+        var rows: [MeetingCalendarEntry] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            rows.append(MeetingCalendarEntry(
+                id: sqlite3_column_int64(statement, 0),
+                title: stringColumn(statement, index: 1),
+                startTime: stringColumn(statement, index: 2),
+                durationSeconds: sqlite3_column_double(statement, 3),
+                status: MeetingStatus(rawValue: stringColumn(statement, index: 4)) ?? .completed,
+                source: MeetingSource(rawValue: stringColumn(statement, index: 5)) ?? .meeting,
+                calendarEventID: optionalStringColumn(statement, index: 6),
+                folderID: sqlite3_column_type(statement, 7) == SQLITE_NULL
+                    ? nil
+                    : sqlite3_column_int64(statement, 7)
+            ))
+        }
+        return rows
+    }
+
     public func staleLiveMeetings() throws -> [MeetingRecord] {
         let db = try openDatabase()
         defer { sqlite3_close(db) }
