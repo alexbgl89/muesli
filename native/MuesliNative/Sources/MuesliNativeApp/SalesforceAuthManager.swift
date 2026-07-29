@@ -173,14 +173,16 @@ final class SalesforceAuthManager {
                 continuation.resume(throwing: SalesforceAuthError.portInUse)
                 return
             }
-            var resumed = false
+            // The timeout, the listener state handler, and the receive handler can
+            // all fire concurrently; only one of them may resume.
+            let gate = OneShotGate()
 
             let timeoutWork = DispatchWorkItem { [weak listener] in
-                guard !resumed else { return }
-                resumed = true
+                guard gate.claim() else { return }
                 listener?.cancel()
                 continuation.resume(throwing: SalesforceAuthError.callbackTimeout)
             }
+            let timeout = UncheckedSendable(timeoutWork)
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + Self.callbackTimeoutSeconds,
                 execute: timeoutWork
@@ -200,9 +202,8 @@ final class SalesforceAuthManager {
                         DispatchQueue.main.async { NSWorkspace.shared.open(authURL) }
                     }
                 case .failed:
-                    guard !resumed else { return }
-                    resumed = true
-                    timeoutWork.cancel()
+                    guard gate.claim() else { return }
+                    timeout.value.cancel()
                     continuation.resume(throwing: SalesforceAuthError.portInUse)
                 default:
                     break
@@ -214,10 +215,9 @@ final class SalesforceAuthManager {
                 connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
                     defer {
                         listener.cancel()
-                        timeoutWork.cancel()
+                        timeout.value.cancel()
                     }
-                    guard !resumed else { return }
-                    resumed = true
+                    guard gate.claim() else { return }
 
                     guard let data, let request = String(data: data, encoding: .utf8) else {
                         continuation.resume(throwing: SalesforceAuthError.callbackMissingCode)
@@ -278,7 +278,9 @@ final class SalesforceAuthManager {
         }
     }
 
-    private func extractParam(named name: String, from httpRequest: String) -> String? {
+    /// Pure string parsing with no actor state, called from the listener's
+    /// receive handler, so it is deliberately not main-actor isolated.
+    private nonisolated func extractParam(named name: String, from httpRequest: String) -> String? {
         guard let pathLine = httpRequest.split(separator: "\r\n").first ?? httpRequest.split(separator: "\n").first,
               let pathPart = pathLine.split(separator: " ").dropFirst().first else {
             return nil
