@@ -641,22 +641,22 @@ enum ComputerUseObservationCapture {
            let frame = cgWindowBounds(appWindow) ?? fallbackFrame,
            frame.width > 0,
            frame.height > 0,
-           let image = CGWindowListCreateImage(
-               .null,
-               .optionIncludingWindow,
-               windowID,
-               [.bestResolution, .boundsIgnoreFraming]
+           let image = LegacyWindowCapture.image(
+               bounds: .null,
+               listOption: .optionIncludingWindow,
+               windowID: windowID,
+               imageOption: [.bestResolution, .boundsIgnoreFraming]
            ),
            !shouldUseDisplayFallbackForScreenshot(width: image.width, height: image.height, frame: frame) {
             return screenshotObservation(image: image, frame: frame)
         }
 
         guard let displayFrame = displayFrame(containing: fallbackFrame),
-              let image = CGWindowListCreateImage(
-                  displayFrame,
-                  .optionOnScreenOnly,
-                  kCGNullWindowID,
-                  [.bestResolution]
+              let image = LegacyWindowCapture.image(
+                  bounds: displayFrame,
+                  listOption: .optionOnScreenOnly,
+                  windowID: kCGNullWindowID,
+                  imageOption: [.bestResolution]
               ) else { return nil }
         return screenshotObservation(image: image, frame: displayFrame)
     }
