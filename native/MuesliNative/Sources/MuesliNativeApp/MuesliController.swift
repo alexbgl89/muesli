@@ -1046,6 +1046,18 @@ final class MuesliController: NSObject {
             folderID: appState.selectedFolderID,
             origin: appState.meetingOriginFilter
         )) ?? []
+        appState.meetingsViewMode = config.resolvedMeetingsViewMode
+        // The 200-row `recentMeetings` page cannot back a calendar the user can
+        // scroll back through, so the calendar reads a metadata-only projection
+        // instead. It stays unloaded while the list view is showing.
+        if appState.meetingsViewMode == .calendar {
+            appState.meetingCalendarEntries = (try? dictationStore.meetingCalendarEntries(
+                folderID: appState.selectedFolderID,
+                origin: appState.meetingOriginFilter
+            )) ?? []
+        } else if !appState.meetingCalendarEntries.isEmpty {
+            appState.meetingCalendarEntries = []
+        }
         let counts = (try? dictationStore.meetingCounts(origin: appState.meetingOriginFilter))
             ?? (total: 0, byFolder: [:], directByFolder: [:])
         appState.totalMeetingCount = counts.total
@@ -4497,6 +4509,12 @@ final class MuesliController: NSObject {
 
     func filterMeetings(origin: RecordOriginFilter) {
         appState.meetingOriginFilter = origin
+        syncAppState()
+    }
+
+    func setMeetingsViewMode(_ mode: MeetingsViewMode) {
+        guard config.resolvedMeetingsViewMode != mode else { return }
+        updateConfig { $0.meetingsViewMode = mode.rawValue }
         syncAppState()
     }
 

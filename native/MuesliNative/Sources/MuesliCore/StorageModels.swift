@@ -367,6 +367,40 @@ public struct MeetingRecord: Identifiable, Codable, Sendable {
     }
 }
 
+/// Lightweight meeting projection for the calendar grid. Carries only the
+/// columns a day cell renders, so the calendar can cover the full history
+/// without paging in transcripts and notes.
+public struct MeetingCalendarEntry: Identifiable, Sendable, Equatable {
+    public let id: Int64
+    public let title: String
+    public let startTime: String
+    public let durationSeconds: Double
+    public let status: MeetingStatus
+    public let source: MeetingSource
+    public let calendarEventID: String?
+    public let folderID: Int64?
+
+    public init(
+        id: Int64,
+        title: String,
+        startTime: String,
+        durationSeconds: Double,
+        status: MeetingStatus = .completed,
+        source: MeetingSource = .meeting,
+        calendarEventID: String? = nil,
+        folderID: Int64? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.startTime = startTime
+        self.durationSeconds = durationSeconds
+        self.status = status
+        self.source = source
+        self.calendarEventID = calendarEventID
+        self.folderID = folderID
+    }
+}
+
 /// A record of a meeting having been logged to a Salesforce activity (Task).
 public struct SalesforceLogEntry: Identifiable, Sendable, Equatable {
     public let id: Int64

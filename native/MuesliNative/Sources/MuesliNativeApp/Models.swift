@@ -1038,6 +1038,7 @@ struct AppConfig: Codable {
     var meetingTranscriptionModel: String = BackendOption.whisper.model
     var meetingSummaryBackend: String = MeetingSummaryBackendOption.chatGPT.backend
     var defaultMeetingTemplateID: String = MeetingTemplates.autoID
+    var meetingsViewMode: String = MeetingsViewMode.list.rawValue
     var whisperModel: String = BackendOption.whisper.model
     var idleTimeout: Double = 120
     var autoRecordMeetings: Bool = false
@@ -1167,6 +1168,7 @@ struct AppConfig: Codable {
         case meetingTranscriptionModel = "meeting_transcription_model"
         case meetingSummaryBackend = "meeting_summary_backend"
         case defaultMeetingTemplateID = "default_meeting_template_id"
+        case meetingsViewMode = "meetings_view_mode"
         case whisperModel = "whisper_model"
         case idleTimeout = "idle_timeout"
         case autoRecordMeetings = "auto_record_meetings"
@@ -1298,6 +1300,7 @@ struct AppConfig: Codable {
         meetingTranscriptionModel = (try? c.decode(String.self, forKey: .meetingTranscriptionModel)) ?? sttModel
         meetingSummaryBackend = (try? c.decode(String.self, forKey: .meetingSummaryBackend)) ?? defaults.meetingSummaryBackend
         defaultMeetingTemplateID = (try? c.decode(String.self, forKey: .defaultMeetingTemplateID)) ?? defaults.defaultMeetingTemplateID
+        meetingsViewMode = MeetingsViewMode.resolved(try? c.decode(String.self, forKey: .meetingsViewMode)).rawValue
         whisperModel = (try? c.decode(String.self, forKey: .whisperModel)) ?? defaults.whisperModel
         idleTimeout = (try? c.decode(Double.self, forKey: .idleTimeout)) ?? defaults.idleTimeout
         autoRecordMeetings = (try? c.decode(Bool.self, forKey: .autoRecordMeetings)) ?? defaults.autoRecordMeetings
@@ -1469,6 +1472,10 @@ struct AppConfig: Codable {
 
     var resolvedNemotron35Language: Nemotron35Language {
         Nemotron35Language.resolved(nemotron35Language)
+    }
+
+    var resolvedMeetingsViewMode: MeetingsViewMode {
+        MeetingsViewMode.resolved(meetingsViewMode)
     }
 
     var resolvedMeetingLiveCaptionBackend: MeetingLiveCaptionBackend {

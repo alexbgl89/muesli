@@ -11,6 +11,7 @@ Local-first macOS app for **dictation** and **meeting transcription** on Apple S
 - **Dictation:** Hold hotkey → speak → release → text pasted at cursor (~0.13s with Parakeet)
 - **Meeting transcription:** Captures mic (You) + system audio (Others) → VAD-driven chunking → speaker diarization → AI-powered meeting notes
 - **Meeting export:** Export notes or transcript as PDF (paginated US Letter) or Markdown via `MeetingExporter.swift`
+- **Meetings browser:** List or month-calendar view, toggled per user and persisted in config
 - **Screen context:** Accessibility API captures app name + text around cursor for dictation context-awareness (opt-in, off by default)
 - **11 ASR models:** Parakeet v3/v2, Whisper Tiny/Small/Medium/Large Turbo, Cohere Transcribe, Nemotron 3.5 Multilingual, SenseVoice Small, Qwen3 ASR, Indic ASR
 - **3 summarization backends:** OpenAI API key, OpenRouter API key, ChatGPT OAuth (subscription-based)
@@ -144,6 +145,8 @@ native/MuesliNative/Sources/
 │   ├── WhisperKitBackend.swift   # Whisper on CoreML/ANE via WhisperKit
 │   ├── ScreenContextCapture.swift # AX-based app context for dictation + meetings
 │   ├── MeetingExporter.swift     # PDF/Markdown export with NSPrintOperation
+│   ├── MeetingCalendarView.swift # Month grid of meetings + scheduled events
+│   ├── MeetingCalendarLogic.swift # Pure grid/bucketing logic behind the calendar view
 │   ├── OnboardingView.swift      # 7-step onboarding with real permission polling + dictation test
 │   ├── OnboardingProgress.swift  # Crash-safe onboarding state persistence
 │   ├── MeetingSession.swift      # Meeting lifecycle + diarization + screen context
